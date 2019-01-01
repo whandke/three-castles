@@ -1,0 +1,84 @@
+Do komunikacji w ramach całej aplikacji wykorzystywane są następujące kolejki komunikatów:
+
+Player, ConnectionMsg, StatusMsg, TrainingMsg, AttackMsg, NotificationMsg, Unit
+
+struct Player {
+    long type;
+    int wins;
+    int gold;
+    int income;
+    int workers;
+    int light_inf;
+    int heavy_inf;
+    int cavalry;
+    int status;
+};
+
+Kolejka Player odpowiada za przesyłanie danych od serwera do klienta.
+Jej struktura jednocześnie pełni też funkcję pamieci o stanie gry.
+
+struct ConnectionMsg {
+    long type;
+    int player_id;
+};
+
+Kolejka Connection odpowiada za nawiązanie połączenia pomiędzy serwerem a klientem.
+Na początku działania programu serwer nasłuchuje tej kolejki aby znaleźć klienta.
+Następnie w wiadomości zwrotnej nadaje klientowi numer identyfikujący wykorzystywany w całej późniejszej komunikacji.
+
+struct StatusMsg {
+    long type;
+    int msg;
+};
+
+Kolejka Status odpowiada za wiadomości związane z zakończeniem gry.
+Kończący grę klient wysyła przez nią informację do serwera, aby ten zakończył grę i odłączył pozostałych klientów.
+Przez nią też wysyłany jest finalny stan gry w przypadku zwycięstwa.
+
+struct TrainingMsg {
+    long type;
+    int player_id;
+    int kind;
+    int amount;
+};
+
+Kolejka Training służy do przesyłania zawówień na jednostki od gracza do serwera.
+
+struct AttackMsg {
+    long type;
+    long def_id;
+    long off_id;
+    int light_inf;
+    int heavy_inf;
+    int cavalry;
+};
+
+Kolejka Attack służy do przesyłania rozkazów ataku od gracza do serwera.
+
+struct NotificationMsg {
+    long type;
+    char content [50];
+};
+
+Jedna z najważniejszych kolejek dla gameplayu i jednoczenie bardzo mało ważna z perspektywy logiki gry.
+Główną funkcjonalnością tej kolejki jest przesyłanie komunikatów od serwera do klienta, które następnie wyświetlane są w oknie Info.
+Z punktu widzenia logiki gry nie ma na nią wpływu poza faktem, że jej pierwsza wiadomośc o treści "Start" służy jako synchronizacja startu gry u klientów.
+
+struct Unit {
+    long type;
+    int kind;
+    int time;
+};
+
+Kolejka Production wykorzystująca strukturę Unit jest wewnętrzną kolejką serwera i spełnia zadanie kolejki produkcji.
+Moduł Training wrzuca do niej otrzymane rozkazy produkcji, a moduł Production odbiera je w dobrej kolejności i przetwarza.
+
+
+Pamięć współdzielona
+
+Pamięć współdzielona jest bardzo uproszczona w powyżyszm programie.
+W ramach serwera są trzy wskaźniki na strukturę Player (pokazana powyżej), do których dostęp jest ograniczany przy pomocy semaforów.
+Te struktury służą do przechowywania danych o graczach i zarazem do przechowywania całego stanu gry.
+Ułatwia to dostęp do stanu gry i komunikację pomiędzy podprocesami.
+W ramach klienta jest analogicznie jak w serwerze, ale przechowywana jest jedynie jedna struktura Player.
+Przechowuje ona dane o konkretnym graczu i pomaga w komunikacji miedzy procesami klienta.

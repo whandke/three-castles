@@ -611,7 +611,7 @@ int main(){
     printf("[INFO] Starting server...\n");
 
     int f_updater, f_production, f_training, f_attack;
-    //signal(SIGINT, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
 
     printf("[INFO] Initializing Message Queues...\n");
     struct MessageQueues mq = queues_init();
@@ -623,27 +623,6 @@ int main(){
 
     printf("[INFO] Initializing Shared memory...\n");
     struct Players players = players_mem_init();
-
-    /*
-
-    int p1_mem = shmget(MEM_PLAYER_1, sizeof(struct Player), IPC_CREAT | 0640);
-    int p2_mem = shmget(MEM_PLAYER_2, sizeof(struct Player), IPC_CREAT | 0640);
-    int p3_mem = shmget(MEM_PLAYER_3, sizeof(struct Player), IPC_CREAT | 0640);
-    struct Player *p1;
-    struct Player *p2;
-    struct Player *p3;
-    p1 = shmat(p1_mem, 0, 0);
-    p2 = shmat(p2_mem, 0, 0);
-    p3 = shmat(p3_mem, 0, 0);
-
-    players.p1 = p1;
-    players.p2 = p2;
-    players.p3 = p3;
-    players.p1_mem = p1_mem;
-    players.p2_mem = p2_mem;
-    players.p3_mem = p3_mem;
-
-    */
 
     printf("[INFO] Done!\n");
 

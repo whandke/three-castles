@@ -323,10 +323,10 @@ void send_exit_msg(struct MessageQueues mq, struct Player *player){
 int main(){
     struct MessageQueues mq = queues_init();
 
+    signal(SIGINT, SIG_IGN);
+
     int p_mem = shmget(IPC_PRIVATE, sizeof(struct Player), IPC_CREAT | 0640);
     struct Player *player = shmat(p_mem, 0, 0);
-
-    //struct Player *player  = malloc(sizeof(*player));
 
     player_init(player, 0);    
 
@@ -373,27 +373,11 @@ int main(){
     WINDOW * barracks = newwin(9, 25, 6, 26);
     WINDOW * actions = newwin(14, 25, 1, 51);
 
-    /*
-    keypad(stdscr, FALSE);
-    keypad(info, FALSE);
-    keypad(actions, TRUE);
-    keypad(barracks, FALSE);
-    keypad(vault, FALSE);
-    */
-
     nodelay(stdscr, FALSE);
     nodelay(info, FALSE);
     nodelay(actions, TRUE);
     nodelay(barracks, FALSE);
     nodelay(vault, FALSE);
-
-    /*
-    leaveok(stdscr, TRUE);
-    leaveok(info, TRUE);
-    leaveok(actions, TRUE);
-    leaveok(barracks, TRUE);
-    leaveok(vault, TRUE);
-    */
 
     box(info, 0, 0);
     box(actions, 0, 0);
