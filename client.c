@@ -37,6 +37,11 @@
 #define CONN_FROM_SERVER 1
 #define CONN_FROM_CLIENT 2
 
+#define UNIT_WORKER 0
+#define UNIT_LIGHT_INF 1
+#define UNIT_HEAVY_INF 2
+#define UNIT_CAVALRY 3
+
 #define REFRESH 1000
 
 struct Player {
@@ -70,8 +75,8 @@ struct TrainingMsg {
 
 struct AttackMsg {
     long type;
-    int def_id;
-    int off_id;
+    long def_id;
+    long off_id;
     int light_inf;
     int heavy_inf;
     int cavalry;
@@ -149,7 +154,7 @@ void connect_to_server(int mq_connection, struct Player *player){
     player->type = conn_msg.player_id;
     player->status = STATUS_CONNECTED;
 
-    printf("[INFO] Player #%d connected!\n", player->type);
+    fprintf(stderr, "[INFO] Player #%d connected!\n", player->type);
 }
 
 void draw_info(WINDOW *win){
@@ -196,42 +201,70 @@ void draw_barracks(WINDOW *win, struct Player * player){
     wrefresh(win);
 }
 
-void draw_actions(WINDOW *win){
+void draw_actions(WINDOW *win, struct Player *player){
+
+    char actions[7][30] = {
+        "Train Worker   ",
+        "Train LightInf ",
+        "Train HeavyInf ",
+        "Train Cavalry  ",
+        "Attack Player B",
+        "Attack Player C",
+        "Exit           "
+        };
+
+
     wclear(win);
     box(win, 0, 0);
     wattron(win, A_REVERSE);
     mvwprintw(win, 1, 1, "[ACTIONS]");
     wattroff(win, A_REVERSE);
 
-    mvwprintw(win, 2, 1, "X - number");
+    int i = 0;
 
-    mvwprintw(win, 3, 1, "Train");
-    mvwprintw(win, 4, 1, "Worker:    w X");
-    mvwprintw(win, 5, 1, "LightInf:  l X");
-    mvwprintw(win, 6, 1, "HeavyInf:  h X");
-    mvwprintw(win, 7, 1, "Cavalry:   c X");
-
-    mvwprintw(win, 9, 1,  "Attack");
-    mvwprintw(win, 10, 1, "       player l h c");
-    mvwprintw(win, 11, 1, "            a X X X");
-    mvwprintw(win, 12, 1, "            b X X X");
+    for(i = 0; i < 7; i++){
+        if(i == player->status)
+            wattron(win, A_REVERSE);
+        mvwprintw(win, i + 3, 1, actions[i]);
+        wattroff(win, A_REVERSE);
+    }
 
     wrefresh(win);
+}
+
+void player_status(struct Player *p){
+    fprintf(stderr, "[STATUS] |Player #%d| Status %d\n", p->type, p->status);
+    fprintf(stderr, "[STATUS] |  Vault  | Wins: %d Gold: %d Income: %d\n", p->wins, p->gold, p->income);
+    fprintf(stderr, "[STATUS] |  Army   | W: %d, L: %d, H: %d, C: %d\n\n", p->workers, p->light_inf, p->heavy_inf, p->cavalry);
 }
 
 void recieve_player_info(int mq_player_info, struct Player * player){
     struct Player msg;
     int msg_size = sizeof(struct Player) - sizeof(long);
-    if(msgrcv(mq_player_info, &msg, msg_size, player->type, IPC_NOWAIT) == -1)
+    if(msgrcv(mq_player_info, &msg, msg_size, player->type, 0) == -1){
+        fprintf(stderr, "[Error] Recive player info\n");
         return;
+    }
+
     player->gold = msg.gold;
+    player->income = msg.income;
+    player->wins = msg.wins;
+    player->light_inf = msg.light_inf;
+    player->heavy_inf = msg. heavy_inf;
+    player->cavalry = msg.cavalry;
+    player->workers = msg.workers;
+
+    player_status(player);    
 }
 
 void recieve_notifications(int mq_notifications, struct Player * player, WINDOW * info){
     struct NotificationMsg msg;
     int msg_size = sizeof(struct NotificationMsg) - sizeof(long);
-    if(msgrcv(mq_notifications, &msg, msg_size, player->type, IPC_NOWAIT) == -1)
+    if(msgrcv(mq_notifications, &msg, msg_size, player->type, IPC_NOWAIT) == -1){
+        fprintf(stderr, "[Error] Recive notification\n");
         return;
+    }
+    fprintf(stderr, "[Notif] %s\n", msg.content);
     draw_info_s(info, msg.content);
 }
 
@@ -246,42 +279,145 @@ int recieve_endgame_status(int mq_status, struct Player * player){
 void wait_for_start(int mq_notifications, struct Player * player, WINDOW * info){
     struct NotificationMsg msg;
     int msg_size = sizeof(struct NotificationMsg) - sizeof(long);
-    msgrcv(mq_notifications, &msg, msg_size, player->type, 0);
-    draw_info_s(info, msg.content);
+    while(1){
+        msgrcv(mq_notifications, &msg, msg_size, player->type, 0);
+        if(strcmp("Start!", msg.content) == 0) break;
+    }    
+}
+
+void order_training(struct MessageQueues mq, struct Player *player, int unit_type){
+    struct TrainingMsg msg;
+    int msg_size = sizeof(struct TrainingMsg) - sizeof(long);
+    msg.type = player->type;
+    msg.player_id = player->type;
+    msg.kind = unit_type;
+    msg.amount = 1;
+
+    msgsnd(mq.training, &msg, msg_size, 0);
+    fprintf(stderr, "[INFO] Ordered training! Type: %d Amount: %d\n", msg.kind, msg.amount);
+}
+
+void order_attack(struct MessageQueues mq, struct Player *player, long enemy_id){
+    struct AttackMsg msg;
+    int msg_size = sizeof(struct AttackMsg) - sizeof(long);
+    msg.type = 5;
+    msg.off_id = player->type;
+    msg.def_id = enemy_id;
+    msg.light_inf = 1;
+    msg.heavy_inf = 1;
+    msg.cavalry = 1;
+
+    msgsnd(mq.attack, &msg, msg_size, 0);
+    fprintf(stderr, "[INFO] Ordered attack! Off: %ld Def: %ld Type: %ld\n", msg.off_id, msg.def_id, msg.type);
+}
+
+void send_exit_msg(struct MessageQueues mq, struct Player *player){
+    struct StatusMsg msg;
+    int msg_size = sizeof(struct StatusMsg) - sizeof(long);
+    msg.type = player->type;
+    msg.msg = 0;
+
+    msgsnd(mq.status, &msg, msg_size, 0);
 }
 
 int main(){
     struct MessageQueues mq = queues_init();
 
+    //int p_mem = shmget(MEM_PLAYER_1, sizeof(struct Player), IPC_CREAT | 0640);
+    //struct Player *player = shmat(p_mem, 0, 0);
+
     struct Player *player  = malloc(sizeof(*player));
-    player_init(player, 0);
+
+    player_init(player, 0);    
 
     connect_to_server(mq.connection, player);
 
+    long enemy_A;
+    long enemy_B;
+
+    if(player->type == 1){
+        enemy_A = 2;
+        enemy_B = 3;
+    }
+    else if(player->type == 2){
+        enemy_A = 1;
+        enemy_B = 3;
+    } else if(player->type == 3){
+        enemy_A = 1;
+        enemy_B = 2;
+    }
+
+    char buttons[7][30] = {
+        "Train Worker   ",
+        "Train LightInf ",
+        "Train HeavyInf ",
+        "Train Cavalry  ",
+        "Attack Player B",
+        "Attack Player C",
+        "Exit           "
+        };
+
     initscr();
     cbreak();
+    noecho();
     curs_set(0);
+
     WINDOW * info = newwin(5,50,1,1);
     WINDOW * vault = newwin(9, 25, 6, 1);
     WINDOW * barracks = newwin(9, 25, 6, 26);
     WINDOW * actions = newwin(14, 25, 1, 51);
 
+    /*
+    keypad(stdscr, FALSE);
+    keypad(info, FALSE);
+    keypad(actions, TRUE);
+    keypad(barracks, FALSE);
+    keypad(vault, FALSE);
+    */
+
+    nodelay(stdscr, FALSE);
+    nodelay(info, FALSE);
+    nodelay(actions, TRUE);
+    nodelay(barracks, FALSE);
+    nodelay(vault, FALSE);
+
+    /*
+    leaveok(stdscr, TRUE);
+    leaveok(info, TRUE);
+    leaveok(actions, TRUE);
+    leaveok(barracks, TRUE);
+    leaveok(vault, TRUE);
+    */
+
+    box(info, 0, 0);
+    box(actions, 0, 0);
+    box(barracks, 0, 0);
+    box(vault, 0, 0);
+    wrefresh(info);
+    wrefresh(actions);
+    wrefresh(barracks);
+    wrefresh(vault);
+
     wait_for_start(mq.notifications, player, info);
-    draw_vault(vault, player);
-    draw_barracks(barracks, player);
 
-    if(fork() == 0){
-        while(1){
-            recieve_notifications(mq.notifications, player, info);
-            recieve_player_info(mq.player_info, player);
-            draw_vault(vault, player);
-            draw_barracks(barracks, player);
+    if(fork() == 0){                    
+        while(1){            
+        draw_vault(vault, player);
+        draw_barracks(barracks, player);  
+        recieve_notifications(mq.notifications, player, info);   
+        recieve_player_info(mq.player_info, player);       
 
-            usleep(100000);
-        }        
+        usleep(250000);
+        }       
     }
     else {
-        while(1){
+
+        int choice;
+        int highlight = 0;
+        while(1){            
+
+            usleep(100000);
+
             int status = recieve_endgame_status(mq.status, player);
             if(status >= 0){
                 delwin(vault);
@@ -290,7 +426,7 @@ int main(){
                 delwin(info);
                 endwin();
                 if(status == 0){
-                    printf("Player desconnected, closing game...\n");
+                    printf("Player disconnected, closing game...\n");
                 }
                 else {
                     printf("Player #%d won!\n", status);
@@ -298,10 +434,62 @@ int main(){
                 break;
             }
 
-
+            box(actions, 0, 0);
+            redrawwin(actions);
             
+            int i;
+            for(i = 0; i < 7; i++) {
+                if(i == highlight)
+                    wattron(actions, A_REVERSE);
+                mvwprintw(actions, i + 1, 1, buttons[i]);
+                wattroff(actions, A_REVERSE);
+            }
+            choice = wgetch(actions);
+            switch(choice) {
+                case 'w':                    
+                    highlight--;
+                    if(highlight == -1)
+                        highlight = 0;
+                    break;
+                case 's':
+                    highlight++;
+                    if(highlight == 7)
+                        highlight = 6;
+                    break;
+                default:
+                    break;
+            }
+
+            if(choice == 10){
+                switch(highlight){
+                    case 0:
+                        order_training(mq, player, UNIT_WORKER);
+                        break;
+                    case 1:
+                        order_training(mq, player, UNIT_LIGHT_INF);
+                        break;
+                    case 2:
+                        order_training(mq, player, UNIT_HEAVY_INF);
+                        break;
+                    case 3:
+                        order_training(mq, player, UNIT_CAVALRY);
+                        break;
+                    case 4:
+                        order_attack(mq, player, enemy_A);
+                        break;
+                    case 5:
+                        order_attack(mq, player, enemy_B);
+                        break;
+                    case 6:
+                        send_exit_msg(mq, player);
+                        break;
+                }
+            }
+                          
         }
-    }                      
+    }                   
+
+    //shmctl(p_mem, IPC_RMID, 0);   
     
     int my_pid = getpid();
     signal(SIGQUIT, SIG_IGN);

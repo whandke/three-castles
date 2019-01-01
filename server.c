@@ -41,6 +41,8 @@
 #define UNIT_CAVALRY 3
 
 void sem_wait(int sem_id) {
+
+    //printf("[SEMAPHORE] Wait! #%d\n", sem_id);
     struct sembuf semdwn;
     semdwn.sem_num = 0;
     semdwn.sem_op = -1;
@@ -49,6 +51,7 @@ void sem_wait(int sem_id) {
 }
 
 void sem_signal(int sem_id) {
+    //printf("[SEMAPHORE] Signal! #%d\n", sem_id);
     struct sembuf semup;
     semup.sem_num = 0;
     semup.sem_op = 1;
@@ -87,8 +90,8 @@ struct TrainingMsg {
 
 struct AttackMsg {
     long type;
-    int def_id;
-    int off_id;
+    long def_id;
+    long off_id;
     int light_inf;
     int heavy_inf;
     int cavalry;
@@ -252,7 +255,7 @@ void send_win_msg(long winner_id, int mq_status){
 }
 
 void check_win_condition(struct Players players, struct MessageQueues mq){
-    if(players.p1->gold >= 1000)
+    if(players.p1->wins >= 5)
         send_win_msg(players.p1->type, mq.status);
     if(players.p2->wins >= 5)
         send_win_msg(players.p2->type, mq.status);
@@ -261,10 +264,14 @@ void check_win_condition(struct Players players, struct MessageQueues mq){
 }
 
 void send_player_info(int mq_player_info, struct Player *player, int sem){
+    struct Player msg;
     int player_size = sizeof(struct Player) - sizeof(long);
     sem_wait(sem);
-    if(msgsnd(mq_player_info, player, player_size, 0) == -1){
-        perror("Error in sending for player : server");
+
+    msg = *player;
+
+    if(msgsnd(mq_player_info, &msg, player_size, 0) == -1){
+        printf("[ERROR] Sending status to player #%d\n", player->type);
     };
     sem_signal(sem);
 }
@@ -275,12 +282,22 @@ void send_info(int mq_player_info, struct Players players, struct Semaphores sem
     send_player_info(mq_player_info, players.p3, sems.p3);
 }
 
+void player_status(struct Player *p){
+    printf("[STATUS] |Player #%d|\n", p->type);
+    printf("[STATUS] |  Vault  | Wins: %d Gold: %d Income: %d\n", p->wins, p->gold, p->income);
+    printf("[STATUS] |  Army   | W: %d, L: %d, H: %d, C: %d\n\n", p->workers, p->light_inf, p->heavy_inf, p->cavalry);
+}
+
 void p_updater(struct MessageQueues mq, struct Players players, struct Semaphores sems){
     while(1){
         sleep(1);
         check_win_condition(players, mq);
         update_gold(players, sems);
-        printf("[INFO] Gold status |#1:  %d |#2:  %d |#3:  %d |\n", players.p1->gold, players.p2->gold, players.p3->gold);
+
+        player_status(players.p1);
+        player_status(players.p2);
+        player_status(players.p3);
+
         send_info(mq.player_info, players, sems);
     }
 }
@@ -372,6 +389,7 @@ void p_training(struct MessageQueues mq, struct Players players, struct Semaphor
     int training_msg_size = sizeof(struct TrainingMsg) - sizeof(long);
     while(1){
         msgrcv(mq.training, &training_msg, training_msg_size, 0, 0);
+        printf("[INFO] Training order recieved (player: %d, type: %d, amount: %d)\n", training_msg.player_id, training_msg.kind, training_msg.amount);
         switch(training_msg.player_id){
             case 1:
                 p_training_player(mq.production, players.p1, sems.p1, training_msg);
@@ -426,20 +444,38 @@ void attack_finalize(struct Player *off, struct Player *def, int off_sem, int de
 
     if(off_power > def_power){
 
-        ratio = def_power / off_power;
+        if(def_power == 0){
+            off->light_inf += msg.light_inf;
+            off->heavy_inf += msg.heavy_inf;
+            off->cavalry += msg.cavalry;
 
-        def->light_inf = 0;
-        def->heavy_inf = 0;
-        def->cavalry = 0;
+            def->light_inf = 0;
+            def->heavy_inf = 0;
+            def->cavalry = 0;
+        }
+        else{
+            ratio = def_power / off_power;
 
-        off->light_inf += msg.light_inf - (int)(ratio * msg.light_inf);
-        off->heavy_inf += msg.heavy_inf - (int)(ratio * msg.heavy_inf);
-        off->cavalry += msg.cavalry - (int)(ratio * msg.cavalry);
+            printf("[ATTACK] Ratio %f\n", ratio);
+
+            def->light_inf = 0;
+            def->heavy_inf = 0;
+            def->cavalry = 0;
+
+            off->light_inf += msg.light_inf - (int)(ratio * msg.light_inf);
+            off->heavy_inf += msg.heavy_inf - (int)(ratio * msg.heavy_inf);
+            off->cavalry += msg.cavalry - (int)(ratio * msg.cavalry);
+        }       
+
+        printf("[WINS] Wins before %d\n", off->wins);
 
         off->wins += 1;
 
-        send_notification(off->type, "We've won a battle, Sir!");
-        send_notification(def->type, "They've crushed us, my Lord!");
+        printf("[WINS] Wins after %d\n", off->wins);
+
+        send_notification(off->type, "We won!");
+        send_notification(def->type, "They've crushed us!");
+        printf("[ATTACK] Player #%d won! L: %d, H: %d, C: %d\n", off->type, off->light_inf, off->heavy_inf, off->cavalry);
     }
     else {
         if(def_power > 0){
@@ -450,7 +486,8 @@ void attack_finalize(struct Player *off, struct Player *def, int off_sem, int de
             def->cavalry -= (int)(ratio * def->cavalry);
 
             send_notification(off->type, "Our army was too small, Sire.");
-            send_notification(off->type, "We've defended the castle, Sir!");
+            send_notification(def->type, "We've defended the castle, Sir!");
+            printf("[ATTACK] Player #%d won!\n", def->type);
         }        
     }
     sem_signal(off_sem);
@@ -458,6 +495,9 @@ void attack_finalize(struct Player *off, struct Player *def, int off_sem, int de
 }
 
 int attack_begin(struct Player *off, int off_sem, struct AttackMsg msg){
+
+    printf("[ATTACK] Light: %d, Heavy: %d, Cavalry: %d\n", msg.light_inf, msg.heavy_inf, msg.cavalry);
+
     int result = 1;
 
     sem_wait(off_sem);
@@ -478,15 +518,20 @@ int attack_begin(struct Player *off, int off_sem, struct AttackMsg msg){
     return result;
 }
 
-void attack(struct Player *off, struct Player *def, int off_sem, int def_sem, struct AttackMsg msg){
+void attack(struct MessageQueues mq, struct Player *off, struct Player *def, int off_sem, int def_sem, struct AttackMsg msg){
+    printf("[ATTACK] Begin %d -> %d\n", off->type, def->type);
     if(attack_begin(off, off_sem, msg) == 0){
         send_notification(off->type, "We need more soldiers, Sire!");
+        printf("[ATTACK] Not enough units!\n");
         return;
     }
 
+    printf("[ATTACK] Legitimate and en route %d -> %d\n", off->type, def->type);
     if(fork() == 0){
         attack_finalize(off, def, off_sem, def_sem, msg);
-    }
+        printf("[ATTACK] Finalized %d -> %d\n", off->type, def->type);
+        sleep(20);
+    }    
 }
 
 void p_attack(struct MessageQueues mq, struct Players players, struct Semaphores sems){
@@ -496,38 +541,49 @@ void p_attack(struct MessageQueues mq, struct Players players, struct Semaphores
     struct Player *def;
     int off_sem, def_sem;
     while(1){
-        msgrcv(mq.attack, &attack_msg, attack_msg_size, 0, 0);        
+        printf("[INFO] Waiting for attack order\n");
 
-        switch(attack_msg.off_id){
-            case 1:
-                off = players.p1;
-                off_sem = sems.p1;
-                break;
-            case 2:
-                off = players.p2;
-                off_sem = sems.p2;
-                break;
-            case 3:
-                off = players.p3;
-                off_sem = sems.p3;
-                break;
-        }
-        switch(attack_msg.def_id){
-            case 1:
-                def = players.p1;
-                def_sem = sems.p1;
-                break;
-            case 2:
-                def = players.p2;
-                def_sem = sems.p2;
-                break;
-            case 3:
-                def = players.p3;
-                def_sem = sems.p3;
-                break;
-        }
+        msgrcv(mq.attack, &attack_msg, attack_msg_size, 0, 0); 
 
-        attack(off, def, off_sem, def_sem, attack_msg);
+        printf("[INFO] Attack order recieved (%ld -> %ld)\n", attack_msg.off_id, attack_msg.def_id);
+
+        int o = attack_msg.off_id;
+        int d = attack_msg.def_id;
+
+        if(o == 1){
+            off = players.p1;
+            off_sem = sems.p1;
+        }
+        else if(o == 2){
+            off = players.p2;
+            off_sem = sems.p2;
+        }
+        else if(o == 3){
+            off = players.p3;
+            off_sem = sems.p3;
+        }
+        else printf("Error");
+
+        if(d == 1){
+            def = players.p1;
+            def_sem = sems.p1;
+        }
+        else if(d == 2){
+            def = players.p2;
+            def_sem = sems.p2;
+        }
+        else if(d == 3){
+            def = players.p3;
+            def_sem = sems.p3;
+        }
+        else printf("Error2");
+
+        attack(mq, off, def, off_sem, def_sem, attack_msg);
+
+        printf("[INFO] Sending after attack info\n");
+        off->status = STATUS_DISCONNECTED;
+        send_player_info(mq.player_info, off, off_sem);
+        printf("[INFO] After attack info sent\n");
     }
 }
 
@@ -568,9 +624,9 @@ int main(){
 
     connect_with_players(mq.connection, players);
 
-    send_notification(players.p1->type, "#1 Start!");
-    send_notification(players.p2->type, "#2 Start!");
-    send_notification(players.p3->type, "#3 Start!");
+    send_notification(players.p1->type, "Start!");
+    send_notification(players.p2->type, "Start!");
+    send_notification(players.p3->type, "Start!");
 
     f_updater = fork();
     if(f_updater == 0){
