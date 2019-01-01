@@ -24,7 +24,7 @@
 #define MQ_NOTIFICATIONS 201
 #define MQ_ATTACK 202
 #define MQ_TRAINING 203
-#define MQ_STATUS 204
+#define MQ_STATUS 504
 #define MQ_PRODUCTION 205
 #define MQ_CONNECTION 206
 
@@ -34,6 +34,11 @@
 
 #define CONN_FROM_SERVER 1
 #define CONN_FROM_CLIENT 2
+
+#define UNIT_WORKER 0
+#define UNIT_LIGHT_INF 1
+#define UNIT_HEAVY_INF 2
+#define UNIT_CAVALRY 3
 
 void sem_wait(int sem_id) {
     struct sembuf semdwn;
@@ -68,6 +73,32 @@ struct ConnectionMsg {
     int player_id;
 };
 
+struct StatusMsg {
+    long type;
+    int msg;
+};
+
+struct TrainingMsg {
+    long type;
+    int player_id;
+    int kind;
+    int amount;
+};
+
+struct AttackMsg {
+    long type;
+    int def_id;
+    int off_id;
+    int light_inf;
+    int heavy_inf;
+    int cavalry;
+};
+
+struct NotificationMsg {
+    long type;
+    char content [50];
+};
+
 struct MessageQueues {
     int player_info;
     int notifications;
@@ -88,10 +119,25 @@ struct Players {
     struct Player *p1;
     struct Player *p2;
     struct Player *p3;
+    int p1_mem, p2_mem, p3_mem;
+};
+
+struct Unit {
+    long type;
+    int kind;
+    int time;
 };
 
 struct MessageQueues queues_init(){
     struct MessageQueues mq;
+
+    msgctl(MQ_PLAYER_INFO, IPC_RMID, 0);
+    msgctl(MQ_NOTIFICATIONS, IPC_RMID, 0);
+    msgctl(MQ_ATTACK, IPC_RMID, 0);
+    msgctl(MQ_TRAINING, IPC_RMID, 0);
+    msgctl(MQ_STATUS, IPC_RMID, 0);
+    msgctl(MQ_PRODUCTION, IPC_RMID, 0);
+    msgctl(MQ_CONNECTION, IPC_RMID, 0);
 
     mq.player_info = msgget(MQ_PLAYER_INFO, IPC_CREAT | 0640);
     mq.notifications = msgget(MQ_NOTIFICATIONS, IPC_CREAT | 0640);
@@ -118,12 +164,35 @@ struct Semaphores semaphores_init(){
     return sem;
 }
 
+struct Players players_mem_init(){
+    struct Players players;
+
+    players.p1_mem = shmget(MEM_PLAYER_1, sizeof(struct Player), IPC_CREAT | 0640);
+    players.p2_mem = shmget(MEM_PLAYER_2, sizeof(struct Player), IPC_CREAT | 0640);
+    players.p3_mem = shmget(MEM_PLAYER_3, sizeof(struct Player), IPC_CREAT | 0640);
+    players.p1 = shmat(players.p1_mem, 0, 0);
+    players.p2 = shmat(players.p2_mem, 0, 0);
+    players.p3 = shmat(players.p3_mem, 0, 0);
+
+    return players;
+}
+
+void send_notification(long id, char *content){
+    int mq = msgget(MQ_NOTIFICATIONS, IPC_CREAT | 0640);
+
+    struct NotificationMsg msg;
+    int msg_size = sizeof(struct NotificationMsg) - sizeof(long);
+    msg.type = id;
+    strcpy(msg.content, content);
+    msgsnd(mq, &msg, msg_size, 0);
+}
+
 void player_init(struct Player * player, int id) {
     player->type = id;
     player->wins = 0;
     player->gold = 300;
-    player->income = 10;
-    player->workers = 1;
+    player->income = 50;
+    player->workers = 0;
     player->light_inf = 0;
     player->heavy_inf = 0;
     player->cavalry = 0;
@@ -171,67 +240,366 @@ void update_gold(struct Players players, struct Semaphores sems){
     update_gold_player(players.p3, sems.p3);
 }
 
-void p_updater(struct Players players, struct MessageQueues mq, struct Semaphores sems){
+void send_win_msg(long winner_id, int mq_status){
+    printf("[INFO] Sending end message...\n");
+    struct StatusMsg status_msg;
+    status_msg.msg = winner_id;
+    int status_msg_size = sizeof(struct StatusMsg) - sizeof(long);
+    status_msg.type = 1;
+    if(msgsnd(mq_status, &status_msg, status_msg_size, 0) == -1){
+        printf("Something is not yes!\n");
+    };
+}
+
+void check_win_condition(struct Players players, struct MessageQueues mq){
+    if(players.p1->gold >= 1000)
+        send_win_msg(players.p1->type, mq.status);
+    if(players.p2->wins >= 5)
+        send_win_msg(players.p2->type, mq.status);
+    if(players.p3->wins >= 5)
+        send_win_msg(players.p3->type, mq.status);
+}
+
+void send_player_info(int mq_player_info, struct Player *player, int sem){
+    int player_size = sizeof(struct Player) - sizeof(long);
+    sem_wait(sem);
+    if(msgsnd(mq_player_info, player, player_size, 0) == -1){
+        perror("Error in sending for player : server");
+    };
+    sem_signal(sem);
+}
+
+void send_info(int mq_player_info, struct Players players, struct Semaphores sems){
+    send_player_info(mq_player_info, players.p1, sems.p1);
+    send_player_info(mq_player_info, players.p2, sems.p2);
+    send_player_info(mq_player_info, players.p3, sems.p3);
+}
+
+void p_updater(struct MessageQueues mq, struct Players players, struct Semaphores sems){
     while(1){
         sleep(1);
-        //check_win_condition(players); //todo
+        check_win_condition(players, mq);
         update_gold(players, sems);
         printf("[INFO] Gold status |#1:  %d |#2:  %d |#3:  %d |\n", players.p1->gold, players.p2->gold, players.p3->gold);
-        //send_player_info(mq.player_info, players, sems); //todo
+        send_info(mq.player_info, players, sems);
+    }
+}
+
+void p_production_player(int mq_production, struct Player *player, int sem){
+    struct Unit unit;
+    int unit_size = sizeof(struct Unit) - sizeof(long);
+    while(1){
+        msgrcv(mq_production, &unit, unit_size, player->type, 0);
+        sleep(unit.time);
+        sem_wait(sem);
+        switch(unit.kind){
+            case UNIT_WORKER:
+                player->income += 5;
+                player->workers += 1;
+                send_notification(player->type, "Worker trained, Sir!");
+                break;
+            case UNIT_LIGHT_INF:
+                player->light_inf += 1;
+                send_notification(player->type, "Light Infantry trained, Sir!");
+                break;
+            case UNIT_HEAVY_INF:
+                player->heavy_inf += 1;
+                send_notification(player->type, "Heavy Infantry trained, Sir!");
+                break;
+            case UNIT_CAVALRY:
+                player->cavalry += 1;
+                send_notification(player->type, "Cavalry trained, Sir!");
+                break;
+        }
+        sem_signal(sem);
+    }
+}
+
+void p_production(int mq_production, struct Players players, struct Semaphores sems){
+    int f_p1, f_p2;
+    
+    f_p1 = fork();
+    if(f_p1 == 0){
+        p_production_player(mq_production, players.p1, sems.p1);
+    }
+    else {
+        f_p2 = fork();
+        if(f_p2 == 0){
+            p_production_player(mq_production, players.p2, sems.p2);
+        }
+        else {
+            p_production_player(mq_production, players.p3, sems.p3);
+        }
+    }
+
+}
+
+int calculate_cost(struct TrainingMsg msg){
+    int unit_cost [] = {150, 100, 250, 550};
+    return unit_cost[msg.kind] * msg.amount;
+}
+
+void p_training_player(int mq_production, struct Player *player, int sem, struct TrainingMsg msg){
+    int unit_time [] = {2, 2, 3, 5};
+
+    int cost = calculate_cost(msg);
+
+    sem_wait(sem);
+    if(cost > player->gold){
+        send_notification(player->type, "Not enough gold, my Lord!");
+        sem_signal(sem);
+        return;
+    }
+    else
+        player->gold -= cost;
+    sem_signal(sem);
+
+    send_notification(player->type, "Training ordered, Sir!");
+
+    struct Unit unit;
+    int unit_size = sizeof(struct Unit) - sizeof(long);
+    unit.type = player->type;
+    unit.kind = msg.kind;
+    unit.time = unit_time[msg.kind];
+
+    for(int i = 0; i < msg.amount; i++){
+        msgsnd(mq_production, &unit, unit_size, 0);
+    }
+}
+
+void p_training(struct MessageQueues mq, struct Players players, struct Semaphores sems){
+    struct TrainingMsg training_msg;
+    int training_msg_size = sizeof(struct TrainingMsg) - sizeof(long);
+    while(1){
+        msgrcv(mq.training, &training_msg, training_msg_size, 0, 0);
+        switch(training_msg.player_id){
+            case 1:
+                p_training_player(mq.production, players.p1, sems.p1, training_msg);
+                break;
+            case 2:
+                p_training_player(mq.production, players.p2, sems.p2, training_msg);
+                break;
+            case 3:
+                p_training_player(mq.production, players.p3, sems.p3, training_msg);
+                break;
+            default:
+                break;
+        }
+    }
+
+}
+
+float calculate_def(struct Player *def){
+    float unit_def [] = {0, 1.2, 3, 1.2};
+    float power = 0;
+
+    power += def->light_inf * unit_def[UNIT_LIGHT_INF];
+    power += def->heavy_inf * unit_def[UNIT_HEAVY_INF];
+    power += def->cavalry * unit_def[UNIT_CAVALRY];
+
+    return power;
+}
+
+float calculate_off(struct AttackMsg msg){
+    float unit_off [] = {0, 1, 1.5, 3.5};
+    float power = 0;
+
+    power += msg.light_inf * unit_off[UNIT_LIGHT_INF];
+    power += msg.heavy_inf * unit_off[UNIT_HEAVY_INF];
+    power += msg.cavalry * unit_off[UNIT_CAVALRY];
+
+    return power;
+}
+
+void attack_finalize(struct Player *off, struct Player *def, int off_sem, int def_sem, struct AttackMsg msg){
+    sleep(5);
+
+    float off_power;
+    float def_power;
+    float ratio;
+
+    sem_wait(off_sem);
+    sem_wait(def_sem);
+
+    off_power = calculate_off(msg);
+    def_power = calculate_def(def);
+
+    if(off_power > def_power){
+
+        ratio = def_power / off_power;
+
+        def->light_inf = 0;
+        def->heavy_inf = 0;
+        def->cavalry = 0;
+
+        off->light_inf += msg.light_inf - (int)(ratio * msg.light_inf);
+        off->heavy_inf += msg.heavy_inf - (int)(ratio * msg.heavy_inf);
+        off->cavalry += msg.cavalry - (int)(ratio * msg.cavalry);
+
+        off->wins += 1;
+
+        send_notification(off->type, "We've won a battle, Sir!");
+        send_notification(def->type, "They've crushed us, my Lord!");
+    }
+    else {
+        if(def_power > 0){
+            ratio = off_power / def_power;
+
+            def->light_inf -= (int)(ratio * def->light_inf);
+            def->heavy_inf -= (int)(ratio * def->heavy_inf);
+            def->cavalry -= (int)(ratio * def->cavalry);
+
+            send_notification(off->type, "Our army was too small, Sire.");
+            send_notification(off->type, "We've defended the castle, Sir!");
+        }        
+    }
+    sem_signal(off_sem);
+    sem_signal(def_sem);
+}
+
+int attack_begin(struct Player *off, int off_sem, struct AttackMsg msg){
+    int result = 1;
+
+    sem_wait(off_sem);
+    if(off->light_inf < msg.light_inf)
+        result = 0;
+    if(off->heavy_inf < msg.heavy_inf)
+        result = 0;
+    if(off->cavalry < msg.cavalry)
+        result = 0;
+
+    if(result == 1){
+        off->light_inf -= msg.light_inf;
+        off->heavy_inf -= msg.heavy_inf;
+        off->cavalry -= msg.cavalry;
+    }
+    sem_signal(off_sem);
+
+    return result;
+}
+
+void attack(struct Player *off, struct Player *def, int off_sem, int def_sem, struct AttackMsg msg){
+    if(attack_begin(off, off_sem, msg) == 0){
+        send_notification(off->type, "We need more soldiers, Sire!");
+        return;
+    }
+
+    if(fork() == 0){
+        attack_finalize(off, def, off_sem, def_sem, msg);
+    }
+}
+
+void p_attack(struct MessageQueues mq, struct Players players, struct Semaphores sems){
+    struct AttackMsg attack_msg;
+    int attack_msg_size = sizeof(struct AttackMsg) - sizeof(long);
+    struct Player *off;
+    struct Player *def;
+    int off_sem, def_sem;
+    while(1){
+        msgrcv(mq.attack, &attack_msg, attack_msg_size, 0, 0);        
+
+        switch(attack_msg.off_id){
+            case 1:
+                off = players.p1;
+                off_sem = sems.p1;
+                break;
+            case 2:
+                off = players.p2;
+                off_sem = sems.p2;
+                break;
+            case 3:
+                off = players.p3;
+                off_sem = sems.p3;
+                break;
+        }
+        switch(attack_msg.def_id){
+            case 1:
+                def = players.p1;
+                def_sem = sems.p1;
+                break;
+            case 2:
+                def = players.p2;
+                def_sem = sems.p2;
+                break;
+            case 3:
+                def = players.p3;
+                def_sem = sems.p3;
+                break;
+        }
+
+        attack(off, def, off_sem, def_sem, attack_msg);
+    }
+}
+
+void p_await_exit_msg(struct MessageQueues mq){
+    struct StatusMsg msg;
+    int msg_size = sizeof(struct StatusMsg) - sizeof(long);
+    msgrcv(mq.status, &msg, msg_size, 0, 0);
+    
+    if(msg.msg == 0){
+        printf("[INFO] Player disconnected. Closing...\n");
+        for(long i = 1; i < 4; i++){
+            msg.type = i;
+            msgsnd(mq.status, &msg, msg_size, 0);
+        }
+    }
+    else {
+        printf("[INFO] Player #%d won! Closing...\n", msg.msg);
+        for(int i = 1; i < 4; i++){
+            msg.type = i;
+            msgsnd(mq.status, &msg, msg_size, 0);
+        }
     }
 }
 
 int main(){
     printf("[INFO] Starting server...\n");
 
-    signal(SIGINT, SIG_IGN);
+    //signal(SIGINT, SIG_IGN);
 
     struct MessageQueues mq = queues_init();
     struct Semaphores sems = semaphores_init();
 
     int f_updater, f_production, f_training, f_attack;
 
-    struct Players players;
-
-    int p1_ma = shmget(MEM_PLAYER_1, sizeof(struct Player), IPC_CREAT | 0640);
-    int p2_ma = shmget(MEM_PLAYER_2, sizeof(struct Player), IPC_CREAT | 0640);
-    int p3_ma = shmget(MEM_PLAYER_3, sizeof(struct Player), IPC_CREAT | 0640);
-    players.p1 = shmat(p1_ma, 0, 0);
-    players.p2 = shmat(p2_ma, 0, 0);
-    players.p3 = shmat(p3_ma, 0, 0);
+    struct Players players = players_mem_init();
 
     players_init(players);
 
     connect_with_players(mq.connection, players);
 
+    send_notification(players.p1->type, "#1 Start!");
+    send_notification(players.p2->type, "#2 Start!");
+    send_notification(players.p3->type, "#3 Start!");
+
     f_updater = fork();
     if(f_updater == 0){
         printf("[INFO] Updater process separated!\n");
-        p_updater(players, mq, sems);        
+        p_updater(mq, players, sems);    
     }
     else {
-        f_production = fork();
-        if(f_production == 0){
-            printf("[INFO] Production process separated!\n");
-            //p_production();//todo
+        f_training = fork();
+        if(f_training == 0){
+            printf("[INFO] Training process separated!\n");
+            p_training(mq, players, sems);
         }
         else{
-            f_training = fork();
-            if(f_training == 0){
-                printf("[INFO] Training process separated!\n");
-                //p_training();//todo
+            f_production = fork();
+            if(f_production == 0){
+                printf("[INFO] Production process separated!\n");
+                p_production(mq.production, players, sems);
             }
             else{
                 f_attack = fork();
                 if(f_attack == 0){
                     printf("[INFO] Attack process separated!\n");
-                    //p_attack();//todo
+                    p_attack(mq, players, sems);
                 }
                 else{
                     //Mother process
-                    //p_await_exit_msg();//todo
-                    sleep(10);
+                    p_await_exit_msg(mq);
                     printf("[INFO] Recieved exit message!\n");
+                    printf("[INFO] Closing server!\n");
                 }
             }
 
@@ -255,17 +623,14 @@ int main(){
     msgctl(MQ_CONNECTION, IPC_RMID, 0);
     
     //Shared memory cleanup
-    shmctl(p1_ma, IPC_RMID, 0);
-    shmctl(p2_ma, IPC_RMID, 0);
-    shmctl(p3_ma, IPC_RMID, 0);
+    shmctl(players.p1_mem, IPC_RMID, 0);
+    shmctl(players.p2_mem, IPC_RMID, 0);
+    shmctl(players.p3_mem, IPC_RMID, 0);
 
     //Semaphores cleanup
     semctl(sems.p1, 0, IPC_RMID, 1);
     semctl(sems.p2, 0, IPC_RMID, 1);
     semctl(sems.p3, 0, IPC_RMID, 1);
-
-    printf("Closing server!\n\n");
-    sleep(1);
 
     return 0;
 }
