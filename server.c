@@ -12,9 +12,9 @@
 #include <sys/shm.h>
 #include <sys/sem.h>
 
-#define MEM_PLAYER_1 001
-#define MEM_PLAYER_2 002
-#define MEM_PLAYER_3 003
+#define MEM_PLAYER_1 021
+#define MEM_PLAYER_2 022
+#define MEM_PLAYER_3 023
 
 #define SEM_PLAYER_1 101
 #define SEM_PLAYER_2 102
@@ -60,7 +60,7 @@ void sem_signal(int sem_id) {
 }
 
 struct Player {
-    int type;
+    long type;
     int wins;
     int gold;
     int income;
@@ -190,7 +190,8 @@ void send_notification(long id, char *content){
     msgsnd(mq, &msg, msg_size, 0);
 }
 
-void player_init(struct Player * player, int id) {
+void player_init(struct Player * player, long id) {
+    printf("[INFO] Initializing Player #%ld\n", id);
     player->type = id;
     player->wins = 0;
     player->gold = 300;
@@ -200,16 +201,17 @@ void player_init(struct Player * player, int id) {
     player->heavy_inf = 0;
     player->cavalry = 0;
     player->status = STATUS_PREGAME;
+    printf("[INFO] Done!\n");
 }
 
 void players_init(struct Players players){
-    player_init(players.p1, 1);
-    player_init(players.p2, 2);
-    player_init(players.p3, 3);
+    player_init(players.p1, 1l);
+    player_init(players.p2, 2l);
+    player_init(players.p3, 3l);
 }
 
 void connect_with_player(int mq_connection, struct Player *player, int id){
-    printf("[INFO] Connecting with player #%d...\n", id);
+    printf("[CONNECT] Connecting with player #%d...\n", id);
     
     int conn_msg_size = sizeof(struct ConnectionMsg) - sizeof(long);
     struct ConnectionMsg conn_msg;
@@ -221,14 +223,15 @@ void connect_with_player(int mq_connection, struct Player *player, int id){
     msgsnd(mq_connection, &conn_msg, conn_msg_size, 0);
     player->status = STATUS_CONNECTED;
 
-    printf("[INFO] Player #%d connected!\n", id);
+    printf("[CONNECT] Player #%d connected!\n", id);
 }
 
 void connect_with_players(int mq_status, struct Players players) {
+    printf("[INFO] Initializing connections...\n");
     connect_with_player(mq_status, players.p1, 1);
     connect_with_player(mq_status, players.p2, 2);
     connect_with_player(mq_status, players.p3, 3);
-    printf("[INFO] All players have joined the game!\n");    
+    printf("[INFO] Done!\n");    
 }
 
 void update_gold_player(struct Player *player, int sem){
@@ -271,7 +274,7 @@ void send_player_info(int mq_player_info, struct Player *player, int sem){
     msg = *player;
 
     if(msgsnd(mq_player_info, &msg, player_size, 0) == -1){
-        printf("[ERROR] Sending status to player #%d\n", player->type);
+        printf("[ERROR] Sending status to player #%ld\n", player->type);
     };
     sem_signal(sem);
 }
@@ -283,7 +286,7 @@ void send_info(int mq_player_info, struct Players players, struct Semaphores sem
 }
 
 void player_status(struct Player *p){
-    printf("[STATUS] |Player #%d|\n", p->type);
+    printf("[STATUS] |Player #%ld|\n", p->type);
     printf("[STATUS] |  Vault  | Wins: %d Gold: %d Income: %d\n", p->wins, p->gold, p->income);
     printf("[STATUS] |  Army   | W: %d, L: %d, H: %d, C: %d\n\n", p->workers, p->light_inf, p->heavy_inf, p->cavalry);
 }
@@ -465,17 +468,13 @@ void attack_finalize(struct Player *off, struct Player *def, int off_sem, int de
             off->light_inf += msg.light_inf - (int)(ratio * msg.light_inf);
             off->heavy_inf += msg.heavy_inf - (int)(ratio * msg.heavy_inf);
             off->cavalry += msg.cavalry - (int)(ratio * msg.cavalry);
-        }       
-
-        printf("[WINS] Wins before %d\n", off->wins);
+        }
 
         off->wins += 1;
 
-        printf("[WINS] Wins after %d\n", off->wins);
-
-        send_notification(off->type, "We won!");
+        send_notification(off->type, "We crushed them, my Lord!");
         send_notification(def->type, "They've crushed us!");
-        printf("[ATTACK] Player #%d won! L: %d, H: %d, C: %d\n", off->type, off->light_inf, off->heavy_inf, off->cavalry);
+        printf("[ATTACK] Player #%ld won! L: %d, H: %d, C: %d\n", off->type, off->light_inf, off->heavy_inf, off->cavalry);
     }
     else {
         if(def_power > 0){
@@ -485,9 +484,9 @@ void attack_finalize(struct Player *off, struct Player *def, int off_sem, int de
             def->heavy_inf -= (int)(ratio * def->heavy_inf);
             def->cavalry -= (int)(ratio * def->cavalry);
 
-            send_notification(off->type, "Our army was too small, Sire.");
+            send_notification(off->type, "Our army was too small, Sire. We lost.");
             send_notification(def->type, "We've defended the castle, Sir!");
-            printf("[ATTACK] Player #%d won!\n", def->type);
+            printf("[ATTACK] Player #%ld won!\n", def->type);
         }        
     }
     sem_signal(off_sem);
@@ -519,17 +518,17 @@ int attack_begin(struct Player *off, int off_sem, struct AttackMsg msg){
 }
 
 void attack(struct MessageQueues mq, struct Player *off, struct Player *def, int off_sem, int def_sem, struct AttackMsg msg){
-    printf("[ATTACK] Begin %d -> %d\n", off->type, def->type);
+    printf("[ATTACK] Begin %ld -> %ld\n", off->type, def->type);
     if(attack_begin(off, off_sem, msg) == 0){
         send_notification(off->type, "We need more soldiers, Sire!");
         printf("[ATTACK] Not enough units!\n");
         return;
     }
 
-    printf("[ATTACK] Legitimate and en route %d -> %d\n", off->type, def->type);
+    printf("[ATTACK] Legitimate and en route %ld -> %ld\n", off->type, def->type);
     if(fork() == 0){
         attack_finalize(off, def, off_sem, def_sem, msg);
-        printf("[ATTACK] Finalized %d -> %d\n", off->type, def->type);
+        printf("[ATTACK] Finalized %ld -> %ld\n", off->type, def->type);
         sleep(20);
     }    
 }
@@ -601,7 +600,7 @@ void p_await_exit_msg(struct MessageQueues mq){
     }
     else {
         printf("[INFO] Player #%d won! Closing...\n", msg.msg);
-        for(int i = 1; i < 4; i++){
+        for(long i = 1; i < 4; i++){
             msg.type = i;
             msgsnd(mq.status, &msg, msg_size, 0);
         }
@@ -611,16 +610,46 @@ void p_await_exit_msg(struct MessageQueues mq){
 int main(){
     printf("[INFO] Starting server...\n");
 
+    int f_updater, f_production, f_training, f_attack;
     //signal(SIGINT, SIG_IGN);
 
+    printf("[INFO] Initializing Message Queues...\n");
     struct MessageQueues mq = queues_init();
+    printf("[INFO] Done!\n");
+
+    printf("[INFO] Initializing Message Queues...\n");
     struct Semaphores sems = semaphores_init();
+    printf("[INFO] Done!\n");
 
-    int f_updater, f_production, f_training, f_attack;
-
+    printf("[INFO] Initializing Shared memory...\n");
     struct Players players = players_mem_init();
 
+    /*
+
+    int p1_mem = shmget(MEM_PLAYER_1, sizeof(struct Player), IPC_CREAT | 0640);
+    int p2_mem = shmget(MEM_PLAYER_2, sizeof(struct Player), IPC_CREAT | 0640);
+    int p3_mem = shmget(MEM_PLAYER_3, sizeof(struct Player), IPC_CREAT | 0640);
+    struct Player *p1;
+    struct Player *p2;
+    struct Player *p3;
+    p1 = shmat(p1_mem, 0, 0);
+    p2 = shmat(p2_mem, 0, 0);
+    p3 = shmat(p3_mem, 0, 0);
+
+    players.p1 = p1;
+    players.p2 = p2;
+    players.p3 = p3;
+    players.p1_mem = p1_mem;
+    players.p2_mem = p2_mem;
+    players.p3_mem = p3_mem;
+
+    */
+
+    printf("[INFO] Done!\n");
+
+    printf("[INFO] Initializing Players...\n");
     players_init(players);
+    printf("[INFO] Done!\n");
 
     connect_with_players(mq.connection, players);
 

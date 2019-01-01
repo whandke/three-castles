@@ -45,7 +45,7 @@
 #define REFRESH 1000
 
 struct Player {
-    int type;
+    long type;
     int wins;
     int gold;
     int income;
@@ -154,7 +154,7 @@ void connect_to_server(int mq_connection, struct Player *player){
     player->type = conn_msg.player_id;
     player->status = STATUS_CONNECTED;
 
-    fprintf(stderr, "[INFO] Player #%d connected!\n", player->type);
+    fprintf(stderr, "[INFO] Player #%ld connected!\n", player->type);
 }
 
 void draw_info(WINDOW *win){
@@ -233,7 +233,7 @@ void draw_actions(WINDOW *win, struct Player *player){
 }
 
 void player_status(struct Player *p){
-    fprintf(stderr, "[STATUS] |Player #%d| Status %d\n", p->type, p->status);
+    fprintf(stderr, "[STATUS] |Player #%ld| Status %d\n", p->type, p->status);
     fprintf(stderr, "[STATUS] |  Vault  | Wins: %d Gold: %d Income: %d\n", p->wins, p->gold, p->income);
     fprintf(stderr, "[STATUS] |  Army   | W: %d, L: %d, H: %d, C: %d\n\n", p->workers, p->light_inf, p->heavy_inf, p->cavalry);
 }
@@ -303,9 +303,9 @@ void order_attack(struct MessageQueues mq, struct Player *player, long enemy_id)
     msg.type = 5;
     msg.off_id = player->type;
     msg.def_id = enemy_id;
-    msg.light_inf = 1;
-    msg.heavy_inf = 1;
-    msg.cavalry = 1;
+    msg.light_inf = player->light_inf;
+    msg.heavy_inf = player->heavy_inf;
+    msg.cavalry = player->cavalry;
 
     msgsnd(mq.attack, &msg, msg_size, 0);
     fprintf(stderr, "[INFO] Ordered attack! Off: %ld Def: %ld Type: %ld\n", msg.off_id, msg.def_id, msg.type);
@@ -323,10 +323,10 @@ void send_exit_msg(struct MessageQueues mq, struct Player *player){
 int main(){
     struct MessageQueues mq = queues_init();
 
-    //int p_mem = shmget(MEM_PLAYER_1, sizeof(struct Player), IPC_CREAT | 0640);
-    //struct Player *player = shmat(p_mem, 0, 0);
+    int p_mem = shmget(IPC_PRIVATE, sizeof(struct Player), IPC_CREAT | 0640);
+    struct Player *player = shmat(p_mem, 0, 0);
 
-    struct Player *player  = malloc(sizeof(*player));
+    //struct Player *player  = malloc(sizeof(*player));
 
     player_init(player, 0);    
 
@@ -489,7 +489,7 @@ int main(){
         }
     }                   
 
-    //shmctl(p_mem, IPC_RMID, 0);   
+    shmctl(p_mem, IPC_RMID, 0);   
     
     int my_pid = getpid();
     signal(SIGQUIT, SIG_IGN);
