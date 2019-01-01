@@ -154,7 +154,7 @@ void connect_to_server(int mq_connection, struct Player *player){
     player->type = conn_msg.player_id;
     player->status = STATUS_CONNECTED;
 
-    fprintf(stderr, "[INFO] Player #%ld connected!\n", player->type);
+    //fprintf(stderr, "[INFO] Player #%ld connected!\n", player->type);
 }
 
 void draw_info(WINDOW *win){
@@ -233,16 +233,16 @@ void draw_actions(WINDOW *win, struct Player *player){
 }
 
 void player_status(struct Player *p){
-    fprintf(stderr, "[STATUS] |Player #%ld| Status %d\n", p->type, p->status);
-    fprintf(stderr, "[STATUS] |  Vault  | Wins: %d Gold: %d Income: %d\n", p->wins, p->gold, p->income);
-    fprintf(stderr, "[STATUS] |  Army   | W: %d, L: %d, H: %d, C: %d\n\n", p->workers, p->light_inf, p->heavy_inf, p->cavalry);
+    //fprintf(stderr, "[STATUS] |Player #%ld| Status %d\n", p->type, p->status);
+    //fprintf(stderr, "[STATUS] |  Vault  | Wins: %d Gold: %d Income: %d\n", p->wins, p->gold, p->income);
+    //fprintf(stderr, "[STATUS] |  Army   | W: %d, L: %d, H: %d, C: %d\n\n", p->workers, p->light_inf, p->heavy_inf, p->cavalry);
 }
 
 void recieve_player_info(int mq_player_info, struct Player * player){
     struct Player msg;
     int msg_size = sizeof(struct Player) - sizeof(long);
     if(msgrcv(mq_player_info, &msg, msg_size, player->type, 0) == -1){
-        fprintf(stderr, "[Error] Recive player info\n");
+        //fprintf(stderr, "[Error] Recive player info\n");
         return;
     }
 
@@ -254,17 +254,17 @@ void recieve_player_info(int mq_player_info, struct Player * player){
     player->cavalry = msg.cavalry;
     player->workers = msg.workers;
 
-    player_status(player);    
+    //player_status(player);    
 }
 
 void recieve_notifications(int mq_notifications, struct Player * player, WINDOW * info){
     struct NotificationMsg msg;
     int msg_size = sizeof(struct NotificationMsg) - sizeof(long);
     if(msgrcv(mq_notifications, &msg, msg_size, player->type, IPC_NOWAIT) == -1){
-        fprintf(stderr, "[Error] Recive notification\n");
+        //fprintf(stderr, "[Error] Recive notification\n");
         return;
     }
-    fprintf(stderr, "[Notif] %s\n", msg.content);
+    //fprintf(stderr, "[Notif] %s\n", msg.content);
     draw_info_s(info, msg.content);
 }
 
@@ -294,7 +294,7 @@ void order_training(struct MessageQueues mq, struct Player *player, int unit_typ
     msg.amount = 1;
 
     msgsnd(mq.training, &msg, msg_size, 0);
-    fprintf(stderr, "[INFO] Ordered training! Type: %d Amount: %d\n", msg.kind, msg.amount);
+    //fprintf(stderr, "[INFO] Ordered training! Type: %d Amount: %d\n", msg.kind, msg.amount);
 }
 
 void order_attack(struct MessageQueues mq, struct Player *player, long enemy_id){
@@ -308,7 +308,7 @@ void order_attack(struct MessageQueues mq, struct Player *player, long enemy_id)
     msg.cavalry = player->cavalry;
 
     msgsnd(mq.attack, &msg, msg_size, 0);
-    fprintf(stderr, "[INFO] Ordered attack! Off: %ld Def: %ld Type: %ld\n", msg.off_id, msg.def_id, msg.type);
+    //fprintf(stderr, "[INFO] Ordered attack! Off: %ld Def: %ld Type: %ld\n", msg.off_id, msg.def_id, msg.type);
 }
 
 void send_exit_msg(struct MessageQueues mq, struct Player *player){
@@ -332,30 +332,36 @@ int main(){
 
     connect_to_server(mq.connection, player);
 
+    char buttons[7][30] = {
+        "Train Worker",
+        "Train LightInf",
+        "Train HeavyInf",
+        "Train Cavalry",
+        "A",
+        "B",
+        "Exit"
+        };
+
     long enemy_A;
     long enemy_B;
 
     if(player->type == 1){
         enemy_A = 2;
+        strcpy(buttons[4], "Attack Vault #2");
         enemy_B = 3;
+        strcpy(buttons[5], "Attack Vault #3");
     }
     else if(player->type == 2){
         enemy_A = 1;
+        strcpy(buttons[4], "Attack Vault #1");
         enemy_B = 3;
+        strcpy(buttons[5], "Attack Vault #3");
     } else if(player->type == 3){
         enemy_A = 1;
+        strcpy(buttons[4], "Attack Vault #1");
         enemy_B = 2;
+        strcpy(buttons[5], "Attack Vault #2");
     }
-
-    char buttons[7][30] = {
-        "Train Worker   ",
-        "Train LightInf ",
-        "Train HeavyInf ",
-        "Train Cavalry  ",
-        "Attack Player B",
-        "Attack Player C",
-        "Exit           "
-        };
 
     initscr();
     cbreak();
@@ -436,12 +442,16 @@ int main(){
 
             box(actions, 0, 0);
             redrawwin(actions);
+
+            wattron(actions, A_REVERSE);
+            mvwprintw(actions, 1, 1, "[ACTIONS]");
+            wattroff(actions, A_REVERSE);
             
             int i;
             for(i = 0; i < 7; i++) {
                 if(i == highlight)
                     wattron(actions, A_REVERSE);
-                mvwprintw(actions, i + 1, 1, buttons[i]);
+                mvwprintw(actions, i + 3, 1, buttons[i]);
                 wattroff(actions, A_REVERSE);
             }
             choice = wgetch(actions);
@@ -494,8 +504,6 @@ int main(){
     int my_pid = getpid();
     signal(SIGQUIT, SIG_IGN);
     kill(-my_pid, SIGQUIT);
-    sleep(2);
-    free(player);
     sleep(2);
     return 0;
 }
